@@ -1,0 +1,35 @@
+{
+  "name": "GameAnalytics",
+  "type": "object",
+  "properties": {
+    "round_id": {
+      "type": "number",
+      "description": "Round index (0-5)"
+    },
+    "round_title": {
+      "type": "string",
+      "description": "Round title"
+    },
+    "option_id": {
+      "type": "string",
+      "description": "ID of the chosen option"
+    },
+    "option_label": {
+      "type": "string",
+      "description": "Label of the chosen option"
+    },
+    "ending_type": {
+      "type": "string",
+      "description": "Game ending type (peace, nuclear, humiliation, aggressive_peace)"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Unique session identifier for grouping choices by game"
+    }
+  },
+  "required": [
+    "round_id",
+    "option_id",
+    "option_label"
+  ]
+}
