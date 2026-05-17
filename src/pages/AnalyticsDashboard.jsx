@@ -39,6 +39,7 @@ const ENDING_LABELS = {
 };
 
 function normalizeListResult(result) {
+  console.log("Raw API result:", result);
   if (Array.isArray(result)) return result;
   if (Array.isArray(result?.items)) return result.items;
   if (Array.isArray(result?.data)) return result.data;
@@ -217,22 +218,41 @@ export default function AnalyticsDashboard() {
   const [loading, setLoading] = useState(true);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState("");
+  const [debugInfo, setDebugInfo] = useState("");
   const navigate = useNavigate();
 
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError("");
+      setDebugInfo("Starting fetch...");
+
+      console.log("Attempting to call base44.entities.GameAnalytics.list");
+      
+      // Check if GameAnalytics exists
+      if (!base44?.entities?.GameAnalytics) {
+        throw new Error("GameAnalytics entity not found in base44.entities");
+      }
+
+      setDebugInfo("Entity found, calling list()...");
 
       const result = await base44.entities.GameAnalytics.list("-created_date", 2000);
+      
+      console.log("List result:", result);
+      setDebugInfo(`Received result: ${JSON.stringify(result).substring(0, 200)}...`);
+
       const rows = normalizeListResult(result);
 
+      console.log("Normalized rows:", rows);
+      setDebugInfo(`Normalized to ${rows.length} records`);
+
       setRecords(Array.isArray(rows) ? rows : []);
+      setLoading(false);
     } catch (err) {
       console.error("Failed to load analytics:", err);
       setRecords([]);
-      setError("Failed to load analytics data.");
-    } finally {
+      setError(`Failed to load analytics: ${err.message}`);
+      setDebugInfo(`Error: ${err.message}\nStack: ${err.stack}`);
       setLoading(false);
     }
   }, []);
@@ -257,7 +277,7 @@ export default function AnalyticsDashboard() {
       setRecords([]);
     } catch (err) {
       console.error("Failed to clear analytics:", err);
-      setError("Failed to clear analytics data.");
+      setError(`Failed to clear: ${err.message}`);
     } finally {
       setClearing(false);
     }
@@ -349,13 +369,25 @@ export default function AnalyticsDashboard() {
               <p className="font-mono text-[10px] text-red-700/60 tracking-widest uppercase">
                 Retrieving classified data...
               </p>
+              {debugInfo && (
+                <div className="mt-4 p-4 bg-zinc-900/50 border border-red-900/30 rounded-sm max-w-2xl mx-auto">
+                  <p className="font-mono text-[9px] text-zinc-400 whitespace-pre-wrap text-left">
+                    {debugInfo}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         ) : (
           <>
             {error ? (
               <div className="border border-red-900/40 bg-red-950/20 rounded-sm p-4 mb-6">
-                <p className="font-mono text-[11px] text-red-300">{error}</p>
+                <p className="font-mono text-[11px] text-red-300 mb-2">{error}</p>
+                {debugInfo && (
+                  <pre className="font-mono text-[9px] text-zinc-500 overflow-auto">
+                    {debugInfo}
+                  </pre>
+                )}
               </div>
             ) : null}
 
