@@ -23,7 +23,6 @@ function getEndingFromScore(score) {
 
 export default function Game() {
   const navigate = useNavigate();
-
   const [currentRound, setCurrentRound] = useState(0);
   const [score, setScore] = useState(0);
   const [selectedOption, setSelectedOption] = useState(null);
@@ -54,11 +53,8 @@ export default function Game() {
   }, [score]);
 
   async function saveAnalyticsRow(payload) {
-    if (!base44?.entities?.GameAnalytics) {
-      throw new Error("GameAnalytics entity not found");
-    }
-
-    return base44.entities.GameAnalytics.create(payload);
+    if (!base44?.entities?.GameAnalytics) throw new Error("GameAnalytics entity not found");
+    return await base44.entities.GameAnalytics.create(payload);
   }
 
   async function logChoice(roundIndex, option) {
@@ -73,7 +69,6 @@ export default function Game() {
 
   async function logEnding(finalEndingType) {
     if (hasLoggedEndingRef.current) return;
-
     hasLoggedEndingRef.current = true;
 
     await saveAnalyticsRow({
@@ -85,17 +80,15 @@ export default function Game() {
     });
   }
 
-  const finishGame = async (finalEndingType) => {
+  async function finishGame(finalEndingType) {
     await logEnding(finalEndingType);
-
     if (!isMountedRef.current) return;
-
     setEndingType(finalEndingType);
     setGameOver(true);
     setShowTransition(false);
-  };
+  }
 
-  const handleSelectOption = async (option) => {
+  async function handleSelectOption(option) {
     if (!round || gameOver || showTransition || isSubmittingRef.current) return;
 
     isSubmittingRef.current = true;
@@ -105,8 +98,7 @@ export default function Game() {
 
     try {
       const roundIndex = currentRound;
-      const scoreDelta = Number(option?.score ?? 0);
-      const nextScore = score + scoreDelta;
+      const nextScore = score + Number(option?.score ?? 0);
       const isLastRound = roundIndex === ROUNDS.length - 1;
 
       await logChoice(roundIndex, option);
@@ -114,36 +106,32 @@ export default function Game() {
 
       const forcedEnding = option?.ending_type || null;
       const nuclearEnding = nextScore <= -3 ? "nuclear" : null;
+      const instantEnding = forcedEnding || nuclearEnding;
 
-      if (forcedEnding || nuclearEnding) {
-        const resolvedEnding = forcedEnding || nuclearEnding;
-
+      if (instantEnding) {
         setTimeout(() => {
-          finishGame(resolvedEnding).catch((error) => {
-            console.error("Failed finishing game:", error);
+          finishGame(instantEnding).catch((error) => {
+            console.error(error);
             if (isMountedRef.current) {
-              setAnalyticsError(error.message || "Failed to save final game outcome.");
+              setAnalyticsError(error.message || "Failed to save final outcome.");
               setShowTransition(false);
             }
           });
         }, 1400);
-
         return;
       }
 
       if (isLastRound) {
         const finalEnding = getEndingFromScore(nextScore);
-
         setTimeout(() => {
           finishGame(finalEnding).catch((error) => {
-            console.error("Failed finishing final round:", error);
+            console.error(error);
             if (isMountedRef.current) {
               setAnalyticsError(error.message || "Failed to save final round.");
               setShowTransition(false);
             }
           });
         }, 1400);
-
         return;
       }
 
@@ -154,7 +142,7 @@ export default function Game() {
         setShowTransition(false);
       }, 1400);
     } catch (error) {
-      console.error("Failed to save analytics choice:", error);
+      console.error(error);
       if (isMountedRef.current) {
         setAnalyticsError(error.message || "Failed to save player choice.");
         setShowTransition(false);
@@ -164,36 +152,26 @@ export default function Game() {
         isSubmittingRef.current = false;
       }, 1500);
     }
-  };
+  }
 
-  const handleRestart = () => {
+  function handleRestart() {
     navigate("/");
-  };
+  }
 
   if (gameOver && endingType === "nuclear") {
     return <NuclearWarScreen onRestart={handleRestart} />;
   }
 
   if (gameOver && endingType) {
-    return (
-      <EndingScreen
-        endingType={endingType}
-        score={score}
-        onRestart={handleRestart}
-      />
-    );
+    return <EndingScreen endingType={endingType} score={score} onRestart={handleRestart} />;
   }
 
   if (!round) {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
         <div className="text-center">
-          <p className="font-mono text-sm text-red-400 uppercase tracking-[0.3em]">
-            Loading scenario...
-          </p>
-          {analyticsError ? (
-            <p className="mt-4 font-mono text-xs text-red-700">{analyticsError}</p>
-          ) : null}
+          <p className="font-mono text-sm text-red-400 uppercase tracking-[0.3em]">Loading scenario...</p>
+          {analyticsError ? <p className="mt-4 font-mono text-xs text-red-700">{analyticsError}</p> : null}
         </div>
       </div>
     );
@@ -207,31 +185,18 @@ export default function Game() {
         <div className="flex flex-col gap-6 md:gap-8">
           <header className="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-6 items-start">
             <div>
-              <p className="font-mono text-[10px] md:text-xs text-red-700/70 tracking-[0.35em] uppercase mb-3">
-                The Final Hour
-              </p>
-              <h1 className="font-display text-2xl md:text-4xl text-red-400 tracking-[0.2em] uppercase mb-3">
-                {round.title}
-              </h1>
-              <p className="font-mono text-xs md:text-sm text-zinc-400 tracking-[0.18em] uppercase">
-                {round.date}
-              </p>
+              <p className="font-mono text-[10px] md:text-xs text-red-700/70 tracking-[0.35em] uppercase mb-3">The Final Hour</p>
+              <h1 className="font-display text-2xl md:text-4xl text-red-400 tracking-[0.2em] uppercase mb-3">{round.title}</h1>
+              <p className="font-mono text-xs md:text-sm text-zinc-400 tracking-[0.18em] uppercase">{round.date}</p>
             </div>
 
             <div className="grid grid-cols-2 gap-4 md:min-w-[320px]">
               <div className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-4">
-                <p className="font-mono text-[9px] text-zinc-600 tracking-[0.25em] uppercase mb-2">
-                  Round
-                </p>
-                <p className="font-display text-2xl text-red-400">
-                  {currentRound + 1}/{ROUNDS.length}
-                </p>
+                <p className="font-mono text-[9px] text-zinc-600 tracking-[0.25em] uppercase mb-2">Round</p>
+                <p className="font-display text-2xl text-red-400">{currentRound + 1}/{ROUNDS.length}</p>
               </div>
-
               <div className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-4">
-                <p className="font-mono text-[9px] text-zinc-600 tracking-[0.25em] uppercase mb-2">
-                  Score
-                </p>
+                <p className="font-mono text-[9px] text-zinc-600 tracking-[0.25em] uppercase mb-2">Score</p>
                 <p className="font-display text-2xl text-red-400">{score}</p>
               </div>
             </div>
@@ -241,12 +206,8 @@ export default function Game() {
             <section className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-5 md:p-6">
               <div className="flex items-center justify-between gap-4 mb-6">
                 <div>
-                  <p className="font-mono text-[9px] text-red-700/70 tracking-[0.35em] uppercase mb-2">
-                    Situation Brief
-                  </p>
-                  <h2 className="font-display text-lg md:text-xl text-red-300/90 tracking-[0.16em] uppercase">
-                    Executive Decision Required
-                  </h2>
+                  <p className="font-mono text-[9px] text-red-700/70 tracking-[0.35em] uppercase mb-2">Situation Brief</p>
+                  <h2 className="font-display text-lg md:text-xl text-red-300/90 tracking-[0.16em] uppercase">Executive Decision Required</h2>
                 </div>
                 <CountdownClock round={currentRound} />
               </div>
@@ -288,16 +249,12 @@ export default function Game() {
                     exit={{ opacity: 0 }}
                     className="border border-red-900/30 bg-black/40 rounded-sm p-6 md:p-8"
                   >
-                    <p className="font-mono text-[10px] text-red-700/70 tracking-[0.35em] uppercase mb-3">
-                      Decision Recorded
-                    </p>
+                    <p className="font-mono text-[10px] text-red-700/70 tracking-[0.35em] uppercase mb-3">Decision Recorded</p>
                     <h3 className="font-display text-lg md:text-2xl text-red-300 tracking-[0.18em] uppercase mb-4">
                       {selectedOption?.label || selectedOption?.text || "Choice logged"}
                     </h3>
                     <p className="font-mono text-sm text-zinc-400 leading-relaxed">
-                      {selectedOption?.response ||
-                        selectedOption?.description ||
-                        "Your order has been transmitted. Washington awaits the consequences."}
+                      {selectedOption?.response || selectedOption?.description || "Your order has been transmitted. Washington awaits the consequences."}
                     </p>
                   </motion.div>
                 )}
@@ -306,27 +263,19 @@ export default function Game() {
 
             <aside className="flex flex-col gap-6">
               <div className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-5">
-                <p className="font-mono text-[9px] text-red-700/70 tracking-[0.35em] uppercase mb-4">
-                  Strategic Status
-                </p>
+                <p className="font-mono text-[9px] text-red-700/70 tracking-[0.35em] uppercase mb-4">Strategic Status</p>
                 <DEFCONMeter level={defconLevel} />
               </div>
 
               <div className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-5">
-                <p className="font-mono text-[9px] text-red-700/70 tracking-[0.35em] uppercase mb-4">
-                  Intelligence Feed
-                </p>
+                <p className="font-mono text-[9px] text-red-700/70 tracking-[0.35em] uppercase mb-4">Intelligence Feed</p>
                 <HistoricalTicker round={currentRound} />
               </div>
 
               {analyticsError ? (
                 <div className="border border-red-900/40 bg-red-950/20 rounded-sm p-4">
-                  <p className="font-mono text-[10px] text-red-300 uppercase tracking-[0.2em] mb-2">
-                    Analytics Warning
-                  </p>
-                  <p className="font-mono text-xs text-zinc-400">
-                    {analyticsError}
-                  </p>
+                  <p className="font-mono text-[10px] text-red-300 uppercase tracking-[0.2em] mb-2">Analytics Warning</p>
+                  <p className="font-mono text-xs text-zinc-400">{analyticsError}</p>
                 </div>
               ) : null}
             </aside>
