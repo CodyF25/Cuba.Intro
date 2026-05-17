@@ -1,255 +1,335 @@
-import React, { useState, useCallback, useRef } from "react";
-import { motion } from "framer-motion";
-import { ROUNDS, INITIAL_STATE } from "@/lib/gameData";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import { base44 } from "@/api/base44Client";
-import IntroScreen from "@/components/game/IntroScreen";
-import TensionMeter from "@/components/game/TensionMeter";
-import NewsTicker from "@/components/game/NewsTicker";
-import AdvisorPanel from "@/components/game/AdvisorPanel";
+import { ROUNDS } from "@/lib/gameData";
 import DecisionCard from "@/components/game/DecisionCard";
-import ConsequenceScreen from "@/components/game/ConsequenceScreen";
-import StatusBar from "@/components/game/StatusBar";
-import RoundBriefing from "@/components/game/RoundBriefing";
-import CountdownTimer from "@/components/game/CountdownTimer";
-import RadarWidget from "@/components/game/RadarWidget";
-import NuclearWarScreen from "@/components/game/NuclearWarScreen";
+import HistoricalTicker from "@/components/game/HistoricalTicker";
+import DEFCONMeter from "@/components/game/DEFCONMeter";
+import CountdownClock from "@/components/game/CountdownClock";
 import EndingScreen from "@/components/game/EndingScreen";
-import LegacyScreen from "@/components/game/LegacyScreen";
-import { Radiation } from "lucide-react";
+import NuclearWarScreen from "@/components/game/NuclearWarScreen";
 
-const PHASE_INTRO = "intro";
-const PHASE_PLAYING = "playing";
-const PHASE_CONSEQUENCE = "consequence";
-const PHASE_NUCLEAR = "nuclear";
-const PHASE_ENDING = "ending";
-const PHASE_LEGACY = "legacy";
-
-function generateSessionId() {
-  return Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
+function createSessionId() {
+  return `session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function determineEnding(state) {
-  if (state.tension >= 95) return "nuclear";
-  if (state.tension <= 15 && state.worldOpinion >= 50) return "peace";
-  if (state.militaryPressure >= 80 && state.worldOpinion < 30) return "humiliation";
-  if (state.tension >= 50 && state.worldOpinion >= 40) return "aggressive_peace";
-  if (state.worldOpinion >= 50) return "peace";
-  return "aggressive_peace";
+function getEndingFromScore(score) {
+  if (score <= -3) return "nuclear";
+  if (score <= 1) return "humiliation";
+  if (score <= 5) return "aggressive_peace";
+  return "peace";
 }
 
 export default function Game() {
-  const [phase, setPhase] = useState(PHASE_INTRO);
-  const [gameState, setGameState] = useState({ ...INITIAL_STATE });
-  const [lastChoice, setLastChoice] = useState(null);
+  const navigate = useNavigate();
+
+  const [currentRound, setCurrentRound] = useState(0);
+  const [score, setScore] = useState(0);
+  const [selectedOption, setSelectedOption] = useState(null);
+  const [showTransition, setShowTransition] = useState(false);
+  const [gameOver, setGameOver] = useState(false);
   const [endingType, setEndingType] = useState(null);
-  const [timerKey, setTimerKey] = useState(0);
-  const sessionId = useRef(generateSessionId());
+  const [analyticsError, setAnalyticsError] = useState("");
+  const [sessionId] = useState(() => createSessionId());
 
-  const handleStart = () => {
-    sessionId.current = generateSessionId();
-    setGameState({ ...INITIAL_STATE });
-    setPhase(PHASE_PLAYING);
-    setTimerKey(prev => prev + 1);
-  };
+  const isMountedRef = useRef(true);
+  const hasLoggedEndingRef = useRef(false);
+  const isSubmittingRef = useRef(false);
 
-  const trackChoice = useCallback((option, roundIndex, endingTypeValue = null) => {
-    const round = ROUNDS[roundIndex];
-    base44.entities.GameAnalytics.create({
-      round_id: roundIndex,
-      round_title: round?.title || "",
-      option_id: option.id,
-      option_label: option.label,
-      ending_type: endingTypeValue,
-      session_id: sessionId.current,
-    });
+  const round = ROUNDS?.[currentRound];
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
-  const handleDecision = useCallback((option) => {
-    setLastChoice(option);
+  const defconLevel = useMemo(() => {
+    if (score <= -3) return 1;
+    if (score <= -1) return 2;
+    if (score <= 2) return 3;
+    if (score <= 5) return 4;
+    return 5;
+  }, [score]);
 
-    const newState = {
-      ...gameState,
-      tension: Math.max(0, Math.min(100, gameState.tension + option.tensionChange)),
-      worldOpinion: Math.max(0, Math.min(100, gameState.worldOpinion + option.worldOpinionChange)),
-      militaryPressure: Math.max(0, Math.min(100, gameState.militaryPressure + option.militaryPressureChange)),
-      sovietTrust: Math.max(0, Math.min(100, gameState.sovietTrust + option.sovietTrustChange)),
-      choices: [...gameState.choices, option],
-    };
-
-    setGameState(newState);
-
-    // Check for nuclear war
-    if (newState.tension >= 95) {
-      trackChoice(option, gameState.round, "nuclear");
-      setPhase(PHASE_NUCLEAR);
-      return;
+  async function saveAnalyticsRow(payload) {
+    if (!base44?.entities?.GameAnalytics) {
+      throw new Error("GameAnalytics entity not found");
     }
 
-    // If this is the last round, determine ending and track it
-    const isLastRound = gameState.round + 1 >= ROUNDS.length;
-    if (isLastRound) {
-      const ending = determineEnding(newState);
-      trackChoice(option, gameState.round, ending);
-    } else {
-      trackChoice(option, gameState.round, null);
-    }
+    return base44.entities.GameAnalytics.create(payload);
+  }
 
-    setPhase(PHASE_CONSEQUENCE);
-  }, [gameState, trackChoice]);
+  async function logChoice(roundIndex, option) {
+    await saveAnalyticsRow({
+      session_id: sessionId,
+      round_id: roundIndex,
+      option_id: option?.id ?? null,
+      option_label: option?.label ?? option?.text ?? "Unknown Choice",
+      ending_type: null,
+    });
+  }
 
-  const handleContinueFromConsequence = useCallback(() => {
-    const nextRound = gameState.round + 1;
+  async function logEnding(finalEndingType) {
+    if (hasLoggedEndingRef.current) return;
 
-    if (nextRound >= ROUNDS.length) {
-      const ending = determineEnding(gameState);
-      setEndingType(ending);
-      setPhase(PHASE_ENDING);
-      return;
-    }
+    hasLoggedEndingRef.current = true;
 
-    setGameState(prev => ({
-      ...prev,
-      round: nextRound,
-      date: ROUNDS[nextRound].date,
-    }));
-    setPhase(PHASE_PLAYING);
-    setTimerKey(prev => prev + 1);
-  }, [gameState]);
+    await saveAnalyticsRow({
+      session_id: sessionId,
+      round_id: null,
+      option_id: null,
+      option_label: null,
+      ending_type: finalEndingType,
+    });
+  }
 
-  const handleTimerExpire = useCallback(() => {
-    const currentRound = ROUNDS[gameState.round];
-    if (currentRound && phase === PHASE_PLAYING) {
-      handleDecision(currentRound.options[0]);
-    }
-  }, [gameState.round, phase, handleDecision]);
+  const finishGame = async (finalEndingType) => {
+    await logEnding(finalEndingType);
 
-  const handleRestart = () => {
-    setGameState({ ...INITIAL_STATE });
-    setLastChoice(null);
-    setEndingType(null);
-    setPhase(PHASE_INTRO);
+    if (!isMountedRef.current) return;
+
+    setEndingType(finalEndingType);
+    setGameOver(true);
+    setShowTransition(false);
   };
 
-  // INTRO
-  if (phase === PHASE_INTRO) {
-    return <IntroScreen onStart={handleStart} />;
+  const handleSelectOption = async (option) => {
+    if (!round || gameOver || showTransition || isSubmittingRef.current) return;
+
+    isSubmittingRef.current = true;
+    setAnalyticsError("");
+    setSelectedOption(option);
+    setShowTransition(true);
+
+    try {
+      const roundIndex = currentRound;
+      const scoreDelta = Number(option?.score ?? 0);
+      const nextScore = score + scoreDelta;
+      const isLastRound = roundIndex === ROUNDS.length - 1;
+
+      await logChoice(roundIndex, option);
+      setScore(nextScore);
+
+      const forcedEnding = option?.ending_type || null;
+      const nuclearEnding = nextScore <= -3 ? "nuclear" : null;
+
+      if (forcedEnding || nuclearEnding) {
+        const resolvedEnding = forcedEnding || nuclearEnding;
+
+        setTimeout(() => {
+          finishGame(resolvedEnding).catch((error) => {
+            console.error("Failed finishing game:", error);
+            if (isMountedRef.current) {
+              setAnalyticsError(error.message || "Failed to save final game outcome.");
+              setShowTransition(false);
+            }
+          });
+        }, 1400);
+
+        return;
+      }
+
+      if (isLastRound) {
+        const finalEnding = getEndingFromScore(nextScore);
+
+        setTimeout(() => {
+          finishGame(finalEnding).catch((error) => {
+            console.error("Failed finishing final round:", error);
+            if (isMountedRef.current) {
+              setAnalyticsError(error.message || "Failed to save final round.");
+              setShowTransition(false);
+            }
+          });
+        }, 1400);
+
+        return;
+      }
+
+      setTimeout(() => {
+        if (!isMountedRef.current) return;
+        setCurrentRound((prev) => prev + 1);
+        setSelectedOption(null);
+        setShowTransition(false);
+      }, 1400);
+    } catch (error) {
+      console.error("Failed to save analytics choice:", error);
+      if (isMountedRef.current) {
+        setAnalyticsError(error.message || "Failed to save player choice.");
+        setShowTransition(false);
+      }
+    } finally {
+      setTimeout(() => {
+        isSubmittingRef.current = false;
+      }, 1500);
+    }
+  };
+
+  const handleRestart = () => {
+    navigate("/");
+  };
+
+  if (gameOver && endingType === "nuclear") {
+    return <NuclearWarScreen onRestart={handleRestart} />;
   }
 
-  // NUCLEAR WAR
-  if (phase === PHASE_NUCLEAR) {
-    return (
-      <NuclearWarScreen
-        onRestart={handleRestart}
-      />
-    );
-  }
-
-  // ENDING
-  if (phase === PHASE_ENDING) {
+  if (gameOver && endingType) {
     return (
       <EndingScreen
         endingType={endingType}
-        choices={gameState.choices}
+        score={score}
         onRestart={handleRestart}
-        onViewLegacy={() => setPhase(PHASE_LEGACY)}
       />
     );
   }
 
-  // LEGACY
-  if (phase === PHASE_LEGACY) {
-    return <LegacyScreen onRestart={handleRestart} />;
-  }
-
-  // CONSEQUENCE
-  if (phase === PHASE_CONSEQUENCE && lastChoice) {
+  if (!round) {
     return (
-      <ConsequenceScreen
-        option={lastChoice}
-        onContinue={handleContinueFromConsequence}
-      />
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-center">
+          <p className="font-mono text-sm text-red-400 uppercase tracking-[0.3em]">
+            Loading scenario...
+          </p>
+          {analyticsError ? (
+            <p className="mt-4 font-mono text-xs text-red-700">{analyticsError}</p>
+          ) : null}
+        </div>
+      </div>
     );
   }
-
-  // PLAYING
-  const currentRound = ROUNDS[gameState.round];
-  if (!currentRound) return null;
 
   return (
-    <div className="min-h-screen bg-background relative">
-      {/* CRT overlay */}
-      <div className="crt-overlay" />
+    <div className="min-h-screen bg-black text-white overflow-hidden relative">
+      <div className="crt-overlay pointer-events-none" />
 
-      {/* News ticker */}
-      <NewsTicker headline={currentRound.newsHeadline} />
-
-      {/* Main game layout */}
-      <div className="max-w-7xl mx-auto p-3 md:p-6">
-        {/* Top bar */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Radiation className="w-4 h-4 text-primary" />
-            <span className="font-display text-sm tracking-[0.2em] text-foreground uppercase">
-              White House Situation Room
-            </span>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="font-mono text-[10px] text-muted-foreground">
-              ROUND {gameState.round + 1} / {ROUNDS.length}
-            </span>
-            <CountdownTimer
-              key={timerKey}
-              seconds={120}
-              onExpire={handleTimerExpire}
-              paused={phase !== PHASE_PLAYING}
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-          {/* Left sidebar - Status */}
-          <div className="lg:col-span-3 space-y-4 order-2 lg:order-1">
-            <TensionMeter tension={gameState.tension} />
-            <StatusBar
-              worldOpinion={gameState.worldOpinion}
-              militaryPressure={gameState.militaryPressure}
-              sovietTrust={gameState.sovietTrust}
-              date={gameState.date}
-            />
-            <div className="hidden lg:block">
-              <RadarWidget />
+      <div className="relative z-10 max-w-7xl mx-auto px-4 md:px-8 py-6 md:py-8">
+        <div className="flex flex-col gap-6 md:gap-8">
+          <header className="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-6 items-start">
+            <div>
+              <p className="font-mono text-[10px] md:text-xs text-red-700/70 tracking-[0.35em] uppercase mb-3">
+                The Final Hour
+              </p>
+              <h1 className="font-display text-2xl md:text-4xl text-red-400 tracking-[0.2em] uppercase mb-3">
+                {round.title}
+              </h1>
+              <p className="font-mono text-xs md:text-sm text-zinc-400 tracking-[0.18em] uppercase">
+                {round.date}
+              </p>
             </div>
-          </div>
 
-          {/* Center - Briefing and Decisions */}
-          <div className="lg:col-span-6 order-1 lg:order-2">
-            <RoundBriefing round={currentRound} />
-
-            <div className="mt-4">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="h-px flex-1 bg-border" />
-                <span className="font-display text-[10px] tracking-[0.3em] text-primary uppercase">
-                  Choose Your Response
-                </span>
-                <div className="h-px flex-1 bg-border" />
+            <div className="grid grid-cols-2 gap-4 md:min-w-[320px]">
+              <div className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-4">
+                <p className="font-mono text-[9px] text-zinc-600 tracking-[0.25em] uppercase mb-2">
+                  Round
+                </p>
+                <p className="font-display text-2xl text-red-400">
+                  {currentRound + 1}/{ROUNDS.length}
+                </p>
               </div>
-              <div className="space-y-3">
-                {currentRound.options.map((option, i) => (
-                  <DecisionCard
-                    key={option.id}
-                    option={option}
-                    index={i}
-                    onSelect={handleDecision}
-                    disabled={phase !== PHASE_PLAYING}
-                  />
-                ))}
+
+              <div className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-4">
+                <p className="font-mono text-[9px] text-zinc-600 tracking-[0.25em] uppercase mb-2">
+                  Score
+                </p>
+                <p className="font-display text-2xl text-red-400">{score}</p>
               </div>
             </div>
-          </div>
+          </header>
 
-          {/* Right sidebar - Advisors */}
-          <div className="lg:col-span-3 order-3">
-            <AdvisorPanel advisors={currentRound.advisors} />
+          <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_0.8fr] gap-6">
+            <section className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-5 md:p-6">
+              <div className="flex items-center justify-between gap-4 mb-6">
+                <div>
+                  <p className="font-mono text-[9px] text-red-700/70 tracking-[0.35em] uppercase mb-2">
+                    Situation Brief
+                  </p>
+                  <h2 className="font-display text-lg md:text-xl text-red-300/90 tracking-[0.16em] uppercase">
+                    Executive Decision Required
+                  </h2>
+                </div>
+                <CountdownClock round={currentRound} />
+              </div>
+
+              <motion.p
+                key={currentRound}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.45 }}
+                className="font-mono text-sm md:text-base leading-relaxed text-zinc-300 max-w-3xl mb-8"
+              >
+                {round.prompt}
+              </motion.p>
+
+              <AnimatePresence mode="wait">
+                {!showTransition ? (
+                  <motion.div
+                    key={`round-${currentRound}`}
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -14 }}
+                    transition={{ duration: 0.35 }}
+                    className="grid grid-cols-1 md:grid-cols-2 gap-4"
+                  >
+                    {round.options.map((option, index) => (
+                      <DecisionCard
+                        key={option.id || index}
+                        option={option}
+                        index={index}
+                        onSelect={() => handleSelectOption(option)}
+                      />
+                    ))}
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key={`transition-${currentRound}`}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="border border-red-900/30 bg-black/40 rounded-sm p-6 md:p-8"
+                  >
+                    <p className="font-mono text-[10px] text-red-700/70 tracking-[0.35em] uppercase mb-3">
+                      Decision Recorded
+                    </p>
+                    <h3 className="font-display text-lg md:text-2xl text-red-300 tracking-[0.18em] uppercase mb-4">
+                      {selectedOption?.label || selectedOption?.text || "Choice logged"}
+                    </h3>
+                    <p className="font-mono text-sm text-zinc-400 leading-relaxed">
+                      {selectedOption?.response ||
+                        selectedOption?.description ||
+                        "Your order has been transmitted. Washington awaits the consequences."}
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </section>
+
+            <aside className="flex flex-col gap-6">
+              <div className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-5">
+                <p className="font-mono text-[9px] text-red-700/70 tracking-[0.35em] uppercase mb-4">
+                  Strategic Status
+                </p>
+                <DEFCONMeter level={defconLevel} />
+              </div>
+
+              <div className="border border-red-900/30 bg-zinc-950/70 rounded-sm p-5">
+                <p className="font-mono text-[9px] text-red-700/70 tracking-[0.35em] uppercase mb-4">
+                  Intelligence Feed
+                </p>
+                <HistoricalTicker round={currentRound} />
+              </div>
+
+              {analyticsError ? (
+                <div className="border border-red-900/40 bg-red-950/20 rounded-sm p-4">
+                  <p className="font-mono text-[10px] text-red-300 uppercase tracking-[0.2em] mb-2">
+                    Analytics Warning
+                  </p>
+                  <p className="font-mono text-xs text-zinc-400">
+                    {analyticsError}
+                  </p>
+                </div>
+              ) : null}
+            </aside>
           </div>
         </div>
       </div>
