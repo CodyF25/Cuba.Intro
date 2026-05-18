@@ -25,6 +25,15 @@ const ENDING_LABELS = {
   aggressive_peace: "Peace Through Strength",
 };
 
+function withTimeout(promise, ms = 10000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Request timed out")), ms)
+    ),
+  ]);
+}
+
 function normalizeRecords(result) {
   if (Array.isArray(result)) return result;
   if (Array.isArray(result?.data)) return result.data;
@@ -158,6 +167,22 @@ export default function AnalyticsDashboard() {
   const navigate = useNavigate();
   const isMountedRef = useRef(true);
 
+  const loadViaFunction = async () => {
+    const result = await withTimeout(
+      base44.functions.invoke("get_game_analytics", {}),
+      10000
+    );
+    return normalizeRecords(result);
+  };
+
+  const loadDirectly = async () => {
+    const result = await withTimeout(
+      base44.entities.GameAnalytics.list("-created_date", 2000),
+      10000
+    );
+    return normalizeRecords(result);
+  };
+
   const fetchData = useCallback(async () => {
     try {
       if (isMountedRef.current) {
@@ -165,8 +190,14 @@ export default function AnalyticsDashboard() {
         setError("");
       }
 
-      const result = await base44.functions.invoke("get_game_analytics", {});
-      const normalized = normalizeRecords(result);
+      let normalized = [];
+
+      try {
+        normalized = await loadViaFunction();
+      } catch (fnErr) {
+        console.warn("Backend function failed, falling back to direct entity read:", fnErr);
+        normalized = await loadDirectly();
+      }
 
       if (isMountedRef.current) {
         setRecords(normalized);
@@ -176,10 +207,7 @@ export default function AnalyticsDashboard() {
 
       if (isMountedRef.current) {
         setRecords([]);
-        setError(
-          err?.message ||
-            "Failed to load analytics data. Check backend function get_game_analytics."
-        );
+        setError(err?.message || "Failed to load analytics data.");
       }
     } finally {
       if (isMountedRef.current) {
@@ -195,7 +223,26 @@ export default function AnalyticsDashboard() {
       setClearing(true);
       setError("");
 
-      await base44.functions.invoke("clear_game_analytics", {});
+      try {
+        await withTimeout(
+          base44.functions.invoke("clear_game_analytics", {}),
+          10000
+        );
+      } catch (fnErr) {
+        console.warn("Backend clear failed, falling back to direct deletes:", fnErr);
+        const all = await withTimeout(
+          base44.entities.GameAnalytics.list("-created_date", 5000),
+          10000
+        );
+
+        const normalized = normalizeRecords(all);
+
+        await Promise.allSettled(
+          normalized
+            .filter((r) => r?.id)
+            .map((r) => base44.entities.GameAnalytics.delete(r.id))
+        );
+      }
 
       if (isMountedRef.current) {
         setRecords([]);
@@ -204,10 +251,7 @@ export default function AnalyticsDashboard() {
       console.error("Failed to clear analytics:", err);
 
       if (isMountedRef.current) {
-        setError(
-          err?.message ||
-            "Failed to clear analytics data. Check backend function clear_game_analytics."
-        );
+        setError(err?.message || "Failed to clear analytics data.");
       }
     } finally {
       if (isMountedRef.current) {
