@@ -25,12 +25,12 @@ const ENDING_LABELS = {
   aggressive_peace: "Peace Through Strength",
 };
 
-function normalizeRecords(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.items)) return data.items;
-  if (Array.isArray(data?.results)) return data.results;
-  if (Array.isArray(data?.data)) return data.data;
-  if (Array.isArray(data?.records)) return data.records;
+function normalizeRecords(result) {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result?.data)) return result.data;
+  if (Array.isArray(result?.items)) return result.items;
+  if (Array.isArray(result?.results)) return result.results;
+  if (Array.isArray(result?.records)) return result.records;
   return [];
 }
 
@@ -164,8 +164,8 @@ export default function AnalyticsDashboard() {
         setError("");
       }
 
-      const response = await base44.functions.get_game_analytics({});
-      const normalized = normalizeRecords(response);
+      const result = await base44.functions.invoke("get_game_analytics", {});
+      const normalized = normalizeRecords(result);
 
       if (isMountedRef.current) {
         setRecords(normalized);
@@ -194,7 +194,7 @@ export default function AnalyticsDashboard() {
       setClearing(true);
       setError("");
 
-      await base44.functions.clear_game_analytics({});
+      await base44.functions.invoke("clear_game_analytics", {});
 
       if (isMountedRef.current) {
         setRecords([]);
