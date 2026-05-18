@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
@@ -29,11 +29,13 @@ function normalizeRecords(data) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.items)) return data.items;
   if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.data)) return data.data;
   return [];
 }
 
 function buildChartData(records, roundIndex) {
   const counts = {};
+
   records
     .filter((r) => Number(r.round_id) === roundIndex)
     .forEach((r) => {
@@ -45,20 +47,21 @@ function buildChartData(records, roundIndex) {
 }
 
 function buildEndingData(records) {
+  const endings = records.filter((r) => r.ending_type);
   const counts = {};
 
-  records
-    .filter((r) => r.ending_type)
-    .forEach((r) => {
-      const key = r.ending_type;
-      counts[key] = (counts[key] || 0) + 1;
-    });
+  endings.forEach((r) => {
+    const key = r.ending_type;
+    counts[key] = (counts[key] || 0) + 1;
+  });
+
+  const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
 
   return Object.entries(counts).map(([key, value]) => ({
     name: ENDING_LABELS[key] || key,
     value,
     color: ENDING_COLORS[key] || "#6b7280",
-    __total: Object.values(counts).reduce((sum, n) => sum + n, 0),
+    __total: total,
   }));
 }
 
@@ -150,14 +153,16 @@ export default function AnalyticsDashboard() {
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const isMountedRef = useRef(true);
 
-  const fetchData = useCallback(async (isMountedRef) => {
+  const fetchData = useCallback(async () => {
     try {
-      if (!isMountedRef?.current) return;
-      setLoading(true);
-      setError("");
+      if (isMountedRef.current) {
+        setLoading(true);
+        setError("");
+      }
 
-      const data = await base44.entities.GameAnalytics.list("-created_date", 2000);
+      const data = await base44.asServiceRole.entities.GameAnalytics.list("-created_date", 2000);
       const normalized = normalizeRecords(data);
 
       if (isMountedRef.current) {
@@ -165,12 +170,16 @@ export default function AnalyticsDashboard() {
       }
     } catch (err) {
       console.error("Failed to load analytics:", err);
-      if (isMountedRef?.current) {
+
+      if (isMountedRef.current) {
         setRecords([]);
-        setError("Failed to load analytics data.");
+        setError(
+          err?.message ||
+            "Failed to load analytics data. Check GameAnalytics permissions or service-role access."
+        );
       }
     } finally {
-      if (isMountedRef?.current) {
+      if (isMountedRef.current) {
         setLoading(false);
       }
     }
@@ -183,25 +192,37 @@ export default function AnalyticsDashboard() {
       setClearing(true);
       setError("");
 
-      const all = await base44.entities.GameAnalytics.list("-created_date", 5000);
+      const all = await base44.asServiceRole.entities.GameAnalytics.list("-created_date", 5000);
       const normalized = normalizeRecords(all);
 
       await Promise.allSettled(
-        normalized.map((r) => base44.entities.GameAnalytics.delete(r.id))
+        normalized
+          .filter((r) => r?.id)
+          .map((r) => base44.asServiceRole.entities.GameAnalytics.delete(r.id))
       );
 
-      setRecords([]);
+      if (isMountedRef.current) {
+        setRecords([]);
+      }
     } catch (err) {
       console.error("Failed to clear analytics:", err);
-      setError("Failed to clear analytics data.");
+
+      if (isMountedRef.current) {
+        setError(
+          err?.message ||
+            "Failed to clear analytics data. Check GameAnalytics permissions or service-role access."
+        );
+      }
     } finally {
-      setClearing(false);
+      if (isMountedRef.current) {
+        setClearing(false);
+      }
     }
   };
 
   useEffect(() => {
-    const isMountedRef = { current: true };
-    fetchData(isMountedRef);
+    isMountedRef.current = true;
+    fetchData();
 
     return () => {
       isMountedRef.current = false;
@@ -248,10 +269,7 @@ export default function AnalyticsDashboard() {
             </div>
 
             <button
-              onClick={() => {
-                const isMountedRef = { current: true };
-                fetchData(isMountedRef);
-              }}
+              onClick={fetchData}
               disabled={loading}
               className="p-2 border border-red-900/30 rounded-sm text-red-700 hover:text-red-400 hover:border-red-700/50 transition-colors disabled:opacity-40"
               title="Refresh data"
@@ -294,10 +312,7 @@ export default function AnalyticsDashboard() {
               {error}
             </p>
             <button
-              onClick={() => {
-                const isMountedRef = { current: true };
-                fetchData(isMountedRef);
-              }}
+              onClick={fetchData}
               className="font-mono text-[10px] text-zinc-300 hover:text-white tracking-wider border border-zinc-700 hover:border-zinc-500 px-3 py-2 rounded-sm"
             >
               Retry
@@ -335,7 +350,6 @@ export default function AnalyticsDashboard() {
               <h2 className="font-display text-sm tracking-[0.3em] text-red-400/90 uppercase mb-1">
                 Game Endings Distribution
               </h2>
-
               <p className="font-mono text-[10px] text-zinc-500 mb-4">
                 How do players' crises end?
               </p>
