@@ -25,41 +25,37 @@ const ENDING_LABELS = {
   aggressive_peace: "Peace Through Strength",
 };
 
-function withTimeout(promise, ms = 10000) {
+function withTimeout(promise, ms = 8000) {
   return Promise.race([
     promise,
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Request timed out")), ms)
+      setTimeout(() => reject(new Error("Network timeout loading analytics.")), ms)
     ),
   ]);
 }
 
-function normalizeRecords(result) {
-  if (Array.isArray(result)) return result;
-  if (Array.isArray(result?.data)) return result.data;
-  if (Array.isArray(result?.items)) return result.items;
-  if (Array.isArray(result?.results)) return result.results;
-  if (Array.isArray(result?.records)) return result.records;
-  if (Array.isArray(result?.data?.records)) return result.data.records;
+function normalizeRecords(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.records)) return data.records;
   return [];
 }
 
 function buildChartData(records, roundIndex) {
   const counts = {};
-
   records
     .filter((r) => Number(r.round_id) === roundIndex)
     .forEach((r) => {
       const key = r.option_label || r.option_id || "Unknown";
       counts[key] = (counts[key] || 0) + 1;
     });
-
   return Object.entries(counts).map(([name, value]) => ({ name, value }));
 }
 
 function buildEndingData(records) {
   const counts = {};
-
   records
     .filter((r) => r.ending_type)
     .forEach((r) => {
@@ -92,7 +88,6 @@ const CustomTooltip = ({ active, payload }) => {
       </div>
     );
   }
-
   return null;
 };
 
@@ -167,22 +162,6 @@ export default function AnalyticsDashboard() {
   const navigate = useNavigate();
   const isMountedRef = useRef(true);
 
-  const loadViaFunction = async () => {
-    const result = await withTimeout(
-      base44.functions.invoke("get_game_analytics", {}),
-      10000
-    );
-    return normalizeRecords(result);
-  };
-
-  const loadDirectly = async () => {
-    const result = await withTimeout(
-      base44.entities.GameAnalytics.list("-created_date", 2000),
-      10000
-    );
-    return normalizeRecords(result);
-  };
-
   const fetchData = useCallback(async () => {
     try {
       if (isMountedRef.current) {
@@ -190,14 +169,12 @@ export default function AnalyticsDashboard() {
         setError("");
       }
 
-      let normalized = [];
+      const data = await withTimeout(
+        base44.entities.GameAnalytics.list("-created_date", 2000),
+        8000
+      );
 
-      try {
-        normalized = await loadViaFunction();
-      } catch (fnErr) {
-        console.warn("Backend function failed, falling back to direct entity read:", fnErr);
-        normalized = await loadDirectly();
-      }
+      const normalized = normalizeRecords(data);
 
       if (isMountedRef.current) {
         setRecords(normalized);
@@ -217,47 +194,7 @@ export default function AnalyticsDashboard() {
   }, []);
 
   const clearData = async () => {
-    if (!window.confirm("Delete ALL player analytics data? This cannot be undone.")) return;
-
-    try {
-      setClearing(true);
-      setError("");
-
-      try {
-        await withTimeout(
-          base44.functions.invoke("clear_game_analytics", {}),
-          10000
-        );
-      } catch (fnErr) {
-        console.warn("Backend clear failed, falling back to direct deletes:", fnErr);
-        const all = await withTimeout(
-          base44.entities.GameAnalytics.list("-created_date", 5000),
-          10000
-        );
-
-        const normalized = normalizeRecords(all);
-
-        await Promise.allSettled(
-          normalized
-            .filter((r) => r?.id)
-            .map((r) => base44.entities.GameAnalytics.delete(r.id))
-        );
-      }
-
-      if (isMountedRef.current) {
-        setRecords([]);
-      }
-    } catch (err) {
-      console.error("Failed to clear analytics:", err);
-
-      if (isMountedRef.current) {
-        setError(err?.message || "Failed to clear analytics data.");
-      }
-    } finally {
-      if (isMountedRef.current) {
-        setClearing(false);
-      }
-    }
+    alert("Clear is temporarily disabled while Base44 network requests are unstable.");
   };
 
   useEffect(() => {
@@ -319,9 +256,9 @@ export default function AnalyticsDashboard() {
 
             <button
               onClick={clearData}
-              disabled={clearing || loading}
-              className="p-2 border border-red-900/30 rounded-sm text-red-900 hover:text-red-500 hover:border-red-700/50 transition-colors disabled:opacity-40"
-              title="Clear all player data"
+              disabled
+              className="p-2 border border-red-900/30 rounded-sm text-red-900 disabled:opacity-40"
+              title="Clear temporarily disabled"
             >
               <Trash2 className={`w-4 h-4 ${clearing ? "animate-pulse" : ""}`} />
             </button>
