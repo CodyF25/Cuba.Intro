@@ -163,12 +163,10 @@ export default function AnalyticsDashboard() {
   const isMountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
-    try {
-      if (isMountedRef.current) {
-        setLoading(true);
-        setError("");
-      }
+    setLoading(true);
+    setError("");
 
+    try {
       const data = await withTimeout(
         base44.entities.GameAnalytics.list("-created_date", 2000),
         8000
@@ -187,9 +185,9 @@ export default function AnalyticsDashboard() {
         setError(err?.message || "Failed to load analytics data.");
       }
     } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
+      // Always clear the spinner — must NOT be gated on isMountedRef
+      // so React 18 strict-mode double-invoke can't leave loading=true forever
+      setLoading(false);
     }
   }, []);
 
