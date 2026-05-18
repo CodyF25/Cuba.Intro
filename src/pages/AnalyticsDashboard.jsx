@@ -30,6 +30,7 @@ function normalizeRecords(data) {
   if (Array.isArray(data?.items)) return data.items;
   if (Array.isArray(data?.results)) return data.results;
   if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.records)) return data.records;
   return [];
 }
 
@@ -47,13 +48,14 @@ function buildChartData(records, roundIndex) {
 }
 
 function buildEndingData(records) {
-  const endings = records.filter((r) => r.ending_type);
   const counts = {};
 
-  endings.forEach((r) => {
-    const key = r.ending_type;
-    counts[key] = (counts[key] || 0) + 1;
-  });
+  records
+    .filter((r) => r.ending_type)
+    .forEach((r) => {
+      const key = r.ending_type;
+      counts[key] = (counts[key] || 0) + 1;
+    });
 
   const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
 
@@ -162,8 +164,8 @@ export default function AnalyticsDashboard() {
         setError("");
       }
 
-      const data = await base44.asServiceRole.entities.GameAnalytics.list("-created_date", 2000);
-      const normalized = normalizeRecords(data);
+      const response = await base44.functions.get_game_analytics({});
+      const normalized = normalizeRecords(response);
 
       if (isMountedRef.current) {
         setRecords(normalized);
@@ -175,7 +177,7 @@ export default function AnalyticsDashboard() {
         setRecords([]);
         setError(
           err?.message ||
-            "Failed to load analytics data. Check GameAnalytics permissions or service-role access."
+            "Failed to load analytics data. Check backend function get_game_analytics."
         );
       }
     } finally {
@@ -192,14 +194,7 @@ export default function AnalyticsDashboard() {
       setClearing(true);
       setError("");
 
-      const all = await base44.asServiceRole.entities.GameAnalytics.list("-created_date", 5000);
-      const normalized = normalizeRecords(all);
-
-      await Promise.allSettled(
-        normalized
-          .filter((r) => r?.id)
-          .map((r) => base44.asServiceRole.entities.GameAnalytics.delete(r.id))
-      );
+      await base44.functions.clear_game_analytics({});
 
       if (isMountedRef.current) {
         setRecords([]);
@@ -210,7 +205,7 @@ export default function AnalyticsDashboard() {
       if (isMountedRef.current) {
         setError(
           err?.message ||
-            "Failed to clear analytics data. Check GameAnalytics permissions or service-role access."
+            "Failed to clear analytics data. Check backend function clear_game_analytics."
         );
       }
     } finally {
