@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { base44 } from "@/api/base44Client";
 import { ROUNDS } from "@/lib/gameData";
-import { Lock, RefreshCw, Users, Trash2 } from "lucide-react";
+import { Lock, RefreshCw, Trash2 } from "lucide-react";
 
 const COLORS = [
   "#ef4444", "#f97316", "#eab308", "#22c55e",
@@ -25,28 +25,40 @@ const ENDING_LABELS = {
   aggressive_peace: "Peace Through Strength",
 };
 
+function normalizeRecords(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.results)) return data.results;
+  return [];
+}
+
 function buildChartData(records, roundIndex) {
   const counts = {};
   records
-    .filter((r) => r.round_id === roundIndex)
+    .filter((r) => Number(r.round_id) === roundIndex)
     .forEach((r) => {
-      const key = r.option_label || r.option_id;
+      const key = r.option_label || r.option_id || "Unknown";
       counts[key] = (counts[key] || 0) + 1;
     });
+
   return Object.entries(counts).map(([name, value]) => ({ name, value }));
 }
 
 function buildEndingData(records) {
-  const endings = records.filter((r) => r.ending_type);
   const counts = {};
-  endings.forEach((r) => {
-    const key = r.ending_type;
-    counts[key] = (counts[key] || 0) + 1;
-  });
+
+  records
+    .filter((r) => r.ending_type)
+    .forEach((r) => {
+      const key = r.ending_type;
+      counts[key] = (counts[key] || 0) + 1;
+    });
+
   return Object.entries(counts).map(([key, value]) => ({
     name: ENDING_LABELS[key] || key,
     value,
     color: ENDING_COLORS[key] || "#6b7280",
+    __total: Object.values(counts).reduce((sum, n) => sum + n, 0),
   }));
 }
 
@@ -55,6 +67,7 @@ const CustomTooltip = ({ active, payload }) => {
     const { name, value } = payload[0].payload;
     const total = payload[0].payload.__total || 1;
     const pct = ((value / total) * 100).toFixed(1);
+
     return (
       <div className="bg-zinc-950 border border-red-900/40 rounded-sm px-3 py-2 text-xs font-mono">
         <p className="text-red-300/80 mb-0.5">{name}</p>
@@ -64,13 +77,14 @@ const CustomTooltip = ({ active, payload }) => {
       </div>
     );
   }
+
   return null;
 };
 
 function RoundPieChart({ roundIndex, records }) {
-  const round = ROUNDS[roundIndex];
+  const round = ROUNDS?.[roundIndex];
   const rawData = buildChartData(records, roundIndex);
-  const total = rawData.reduce((s, d) => s + d.value, 0);
+  const total = rawData.reduce((sum, d) => sum + d.value, 0);
   const data = rawData.map((d) => ({ ...d, __total: total }));
 
   return (
@@ -82,12 +96,14 @@ function RoundPieChart({ roundIndex, records }) {
     >
       <div className="mb-1">
         <span className="font-mono text-[10px] text-red-700/70 tracking-widest uppercase">
-          Round {roundIndex + 1} — {round?.date}
+          Round {roundIndex + 1} — {round?.date || "Unknown Date"}
         </span>
       </div>
+
       <h3 className="font-display text-sm tracking-wider text-red-300/90 mb-1">
-        {round?.title}
+        {round?.title || `Round ${roundIndex + 1}`}
       </h3>
+
       <p className="font-mono text-[10px] text-zinc-500 mb-4">
         {total} response{total !== 1 ? "s" : ""}
       </p>
@@ -110,7 +126,7 @@ function RoundPieChart({ roundIndex, records }) {
               stroke="none"
             >
               {data.map((entry, i) => (
-                <Cell key={i} fill={COLORS[i % COLORS.length]} opacity={0.9} />
+                <Cell key={`${entry.name}-${i}`} fill={COLORS[i % COLORS.length]} opacity={0.9} />
               ))}
             </Pie>
             <Tooltip content={<CustomTooltip />} />
@@ -132,39 +148,83 @@ export default function AnalyticsDashboard() {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [clearing, setClearing] = useState(false);
+  const [error, setError] = useState("");
   const navigate = useNavigate();
 
-  const fetchData = async () => {
-    setLoading(true);
-    const data = await base44.entities.GameAnalytics.list("-created_date", 2000);
-    setRecords(data);
-    setLoading(false);
-  };
+  const fetchData = useCallback(async (isMountedRef) => {
+    try {
+      if (!isMountedRef?.current) return;
+      setLoading(true);
+      setError("");
+
+      const data = await base44.entities.GameAnalytics.list("-created_date", 2000);
+      const normalized = normalizeRecords(data);
+
+      if (isMountedRef.current) {
+        setRecords(normalized);
+      }
+    } catch (err) {
+      console.error("Failed to load analytics:", err);
+      if (isMountedRef?.current) {
+        setRecords([]);
+        setError("Failed to load analytics data.");
+      }
+    } finally {
+      if (isMountedRef?.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
 
   const clearData = async () => {
     if (!window.confirm("Delete ALL player analytics data? This cannot be undone.")) return;
-    setClearing(true);
-    const all = await base44.entities.GameAnalytics.list("-created_date", 5000);
-    await Promise.all(all.map((r) => base44.entities.GameAnalytics.delete(r.id)));
-    setRecords([]);
-    setClearing(false);
+
+    try {
+      setClearing(true);
+      setError("");
+
+      const all = await base44.entities.GameAnalytics.list("-created_date", 5000);
+      const normalized = normalizeRecords(all);
+
+      await Promise.allSettled(
+        normalized.map((r) => base44.entities.GameAnalytics.delete(r.id))
+      );
+
+      setRecords([]);
+    } catch (err) {
+      console.error("Failed to clear analytics:", err);
+      setError("Failed to clear analytics data.");
+    } finally {
+      setClearing(false);
+    }
   };
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    const isMountedRef = { current: true };
+    fetchData(isMountedRef);
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [fetchData]);
 
   const endingData = buildEndingData(records);
+
   const totalGames = (() => {
-    const sessions = new Set(records.filter((r) => r.session_id).map((r) => r.session_id));
-    return sessions.size || Math.floor(records.filter((r) => r.round_id === 0).length);
+    const sessions = new Set(
+      records.filter((r) => r.session_id).map((r) => r.session_id)
+    );
+    return sessions.size || records.filter((r) => Number(r.round_id) === 0).length;
   })();
+
+  const totalDecisions = records.filter((r) => !r.ending_type).length;
+  const nuclearEndings = records.filter((r) => r.ending_type === "nuclear").length;
+  const peaceEndings = records.filter((r) => r.ending_type === "peace").length;
 
   return (
     <div className="min-h-screen bg-black text-white">
       <div className="crt-overlay pointer-events-none" />
 
-      {/* Header */}
       <div className="border-b border-red-900/30 bg-zinc-950/90">
         <div className="max-w-7xl mx-auto px-4 md:px-8 py-5 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -181,24 +241,33 @@ export default function AnalyticsDashboard() {
 
           <div className="flex items-center gap-4">
             <div className="text-right hidden sm:block">
-              <p className="font-mono text-[9px] text-zinc-600 tracking-wider uppercase">Total Games</p>
+              <p className="font-mono text-[9px] text-zinc-600 tracking-wider uppercase">
+                Total Games
+              </p>
               <p className="font-display text-2xl text-red-400 font-bold">{totalGames}</p>
             </div>
+
             <button
-              onClick={fetchData}
-              className="p-2 border border-red-900/30 rounded-sm text-red-700 hover:text-red-400 hover:border-red-700/50 transition-colors"
+              onClick={() => {
+                const isMountedRef = { current: true };
+                fetchData(isMountedRef);
+              }}
+              disabled={loading}
+              className="p-2 border border-red-900/30 rounded-sm text-red-700 hover:text-red-400 hover:border-red-700/50 transition-colors disabled:opacity-40"
               title="Refresh data"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             </button>
+
             <button
               onClick={clearData}
-              disabled={clearing}
+              disabled={clearing || loading}
               className="p-2 border border-red-900/30 rounded-sm text-red-900 hover:text-red-500 hover:border-red-700/50 transition-colors disabled:opacity-40"
               title="Clear all player data"
             >
               <Trash2 className={`w-4 h-4 ${clearing ? "animate-pulse" : ""}`} />
             </button>
+
             <button
               onClick={() => navigate("/")}
               className="font-mono text-[10px] text-zinc-600 hover:text-zinc-400 tracking-wider transition-colors border border-zinc-800 hover:border-zinc-600 px-3 py-2 rounded-sm"
@@ -219,18 +288,32 @@ export default function AnalyticsDashboard() {
               </p>
             </div>
           </div>
+        ) : error ? (
+          <div className="border border-red-900/30 bg-zinc-950/80 rounded-sm p-6 text-center">
+            <p className="font-mono text-[11px] text-red-400 tracking-wider uppercase mb-3">
+              {error}
+            </p>
+            <button
+              onClick={() => {
+                const isMountedRef = { current: true };
+                fetchData(isMountedRef);
+              }}
+              className="font-mono text-[10px] text-zinc-300 hover:text-white tracking-wider border border-zinc-700 hover:border-zinc-500 px-3 py-2 rounded-sm"
+            >
+              Retry
+            </button>
+          </div>
         ) : (
           <>
-            {/* Summary stat bar */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
               {[
                 { label: "Total Games Played", value: totalGames },
-                { label: "Total Decisions Recorded", value: records.filter(r => !r.ending_type).length },
-                { label: "Nuclear War Endings", value: records.filter(r => r.ending_type === "nuclear").length },
-                { label: "Peace Endings", value: records.filter(r => r.ending_type === "peace").length },
+                { label: "Total Decisions Recorded", value: totalDecisions },
+                { label: "Nuclear War Endings", value: nuclearEndings },
+                { label: "Peace Endings", value: peaceEndings },
               ].map((stat, i) => (
                 <motion.div
-                  key={i}
+                  key={stat.label}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.05 }}
@@ -244,7 +327,6 @@ export default function AnalyticsDashboard() {
               ))}
             </div>
 
-            {/* Game Endings Pie */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -253,9 +335,11 @@ export default function AnalyticsDashboard() {
               <h2 className="font-display text-sm tracking-[0.3em] text-red-400/90 uppercase mb-1">
                 Game Endings Distribution
               </h2>
+
               <p className="font-mono text-[10px] text-zinc-500 mb-4">
                 How do players' crises end?
               </p>
+
               {endingData.length === 0 ? (
                 <div className="h-40 flex items-center justify-center">
                   <p className="font-mono text-[10px] text-zinc-600 tracking-wider">NO DATA YET</p>
@@ -274,12 +358,10 @@ export default function AnalyticsDashboard() {
                       stroke="none"
                     >
                       {endingData.map((entry, i) => (
-                        <Cell key={i} fill={entry.color} opacity={0.9} />
+                        <Cell key={`${entry.name}-${i}`} fill={entry.color} opacity={0.9} />
                       ))}
                     </Pie>
-                    <Tooltip
-                      content={<CustomTooltip />}
-                    />
+                    <Tooltip content={<CustomTooltip />} />
                     <Legend
                       formatter={(value) => (
                         <span className="font-mono text-[10px] text-zinc-400">{value}</span>
@@ -292,7 +374,6 @@ export default function AnalyticsDashboard() {
               )}
             </motion.div>
 
-            {/* Per-round section header */}
             <div className="flex items-center gap-3 mb-5">
               <div className="h-px flex-1 bg-red-900/30" />
               <span className="font-display text-[10px] tracking-[0.4em] text-red-700/70 uppercase">
@@ -301,7 +382,6 @@ export default function AnalyticsDashboard() {
               <div className="h-px flex-1 bg-red-900/30" />
             </div>
 
-            {/* Round pie charts grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {ROUNDS.map((_, i) => (
                 <RoundPieChart key={i} roundIndex={i} records={records} />
