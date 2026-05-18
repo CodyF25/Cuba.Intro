@@ -31,6 +31,7 @@ function normalizeRecords(result) {
   if (Array.isArray(result?.items)) return result.items;
   if (Array.isArray(result?.results)) return result.results;
   if (Array.isArray(result?.records)) return result.records;
+  if (Array.isArray(result?.data?.records)) return result.data.records;
   return [];
 }
 
