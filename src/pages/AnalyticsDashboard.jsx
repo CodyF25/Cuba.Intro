@@ -185,14 +185,46 @@ export default function AnalyticsDashboard() {
         setError(err?.message || "Failed to load analytics data.");
       }
     } finally {
-      // Always clear the spinner — must NOT be gated on isMountedRef
-      // so React 18 strict-mode double-invoke can't leave loading=true forever
       setLoading(false);
     }
   }, []);
 
   const clearData = async () => {
-    alert("Clear is temporarily disabled while Base44 network requests are unstable.");
+    if (!window.confirm(`Delete all ${records.length} analytics record${records.length !== 1 ? "s" : ""}? This cannot be undone.`)) {
+      return;
+    }
+
+    setClearing(true);
+    setError("");
+
+    try {
+      // Fetch a fresh full list to ensure we get all record IDs
+      const fresh = await withTimeout(
+        base44.entities.GameAnalytics.list("-created_date", 2000),
+        8000
+      );
+      const allRecords = normalizeRecords(fresh);
+
+      // Delete all records in parallel
+      await Promise.all(
+        allRecords
+          .filter((r) => r.id)
+          .map((r) => base44.entities.GameAnalytics.delete(r.id))
+      );
+
+      if (isMountedRef.current) {
+        setRecords([]);
+      }
+    } catch (err) {
+      console.error("Failed to clear analytics:", err);
+      if (isMountedRef.current) {
+        setError(err?.message || "Failed to clear analytics data.");
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setClearing(false);
+      }
+    }
   };
 
   useEffect(() => {
@@ -245,7 +277,7 @@ export default function AnalyticsDashboard() {
 
             <button
               onClick={fetchData}
-              disabled={loading}
+              disabled={loading || clearing}
               className="p-2 border border-red-900/30 rounded-sm text-red-700 hover:text-red-400 hover:border-red-700/50 transition-colors disabled:opacity-40"
               title="Refresh data"
             >
@@ -254,9 +286,9 @@ export default function AnalyticsDashboard() {
 
             <button
               onClick={clearData}
-              disabled
-              className="p-2 border border-red-900/30 rounded-sm text-red-900 disabled:opacity-40"
-              title="Clear temporarily disabled"
+              disabled={loading || clearing || records.length === 0}
+              className="p-2 border border-red-900/30 rounded-sm text-red-700 hover:text-red-400 hover:border-red-700/50 transition-colors disabled:opacity-40"
+              title={records.length === 0 ? "No data to clear" : "Delete all analytics data"}
             >
               <Trash2 className={`w-4 h-4 ${clearing ? "animate-pulse" : ""}`} />
             </button>
@@ -278,6 +310,15 @@ export default function AnalyticsDashboard() {
               <div className="w-8 h-8 border-2 border-red-800 border-t-red-400 rounded-full animate-spin mx-auto mb-4" />
               <p className="font-mono text-[10px] text-red-700/60 tracking-widest uppercase">
                 Retrieving classified data...
+              </p>
+            </div>
+          </div>
+        ) : clearing ? (
+          <div className="flex items-center justify-center py-32">
+            <div className="text-center">
+              <div className="w-8 h-8 border-2 border-red-800 border-t-red-400 rounded-full animate-spin mx-auto mb-4" />
+              <p className="font-mono text-[10px] text-red-700/60 tracking-widest uppercase">
+                Purging classified data...
               </p>
             </div>
           </div>
