@@ -28,6 +28,16 @@ const SecretLink = () => {
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth()
+  const location = useLocation()
+
+  // Always allow the analytics page to load, regardless of auth state
+  if (location.pathname === "/analytics") {
+    return (
+      <Routes>
+        <Route path="/analytics" element={<AnalyticsDashboard />} />
+      </Routes>
+    )
+  }
 
   if (isLoadingPublicSettings || isLoadingAuth) {
     return (
